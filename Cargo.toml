@@ -1,6 +1,6 @@
 [package]
-name = "mcumgr-client"
-version = "0.0.5"
+name = "mcumgr"
+version = "0.0.7"
 edition = "2021"
 repository = "https://github.com/vouch-opensource/mcumgr-client/"
 license = "Apache-2.0"
@@ -8,6 +8,12 @@ description = "Run MCUmgr commands for uploading firmware updates from a PC to a
 include = [
     "/src"
 ]
+
+
+
+[lib]
+crate-type = ["staticlib"] 
+name = "mcumgr"  # 替换为您的实际 crate 名称
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -19,6 +25,7 @@ byteorder = "1.4"
 clap = { version = "4", features = ["derive"] }
 crc16 = "0.4"
 hex = "0.4"
+hex-buffer-serde = "0.4.0"
 humantime = "2.1.0"
 indicatif = "0.17"
 lazy_static = "1.4"
