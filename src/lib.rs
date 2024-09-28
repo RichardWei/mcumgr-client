@@ -84,7 +84,7 @@ impl Default for SerialSpecs {
         SerialSpecs {
             device: String::new(),
             initial_timeout_s: 60,
-            subsequent_timeout_ms: 200,
+            subsequent_timeout_ms: 1000,
             nb_retry: 4,
             linelength: 128,
             mtu: 512,
@@ -93,14 +93,13 @@ impl Default for SerialSpecs {
     }
 }
 
-/// 列出指定设备上的所有可用插槽
+
 #[no_mangle]
-pub extern "C" fn rust_list(device: *const c_char) -> *mut c_char {
+pub extern "C" fn rust_list(device: *const c_char, baudrate: u32) -> *mut c_char {
     if device.is_null() {
         return ptr::null_mut();
     }
 
-    // 将 C 字符串转换为 Rust 字符串
     let device_str = unsafe { CStr::from_ptr(device) };
     let device_name = match device_str.to_str() {
         Ok(s) => s,
@@ -109,30 +108,28 @@ pub extern "C" fn rust_list(device: *const c_char) -> *mut c_char {
         }
     };
 
-    // 创建 SerialSpecs，包含指定的设备名称
     let specs = SerialSpecs {
         device: device_name.to_string(),
+        baudrate, // 使用正确的字段名
         ..SerialSpecs::default()
     };
 
-    // 调用 list 函数，获取插槽信息
     match list(&specs) {
         Ok(v) => {
             let json = serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".to_string());
-
             CString::new(json).unwrap().into_raw()
         }
-        Err(_e) => ptr::null_mut(),
+        Err(_) => ptr::null_mut(),
     }
 }
 
-/// 上传文件到设备
 #[no_mangle]
 pub extern "C" fn rust_upload(
     device: *const c_char,
     filename: *const c_char,
     slot: c_uint,
     callback: Option<ProgressCallback>,
+    baudrate: u32,
 ) -> c_int {
     if device.is_null() || filename.is_null() {
         return -1;
@@ -152,12 +149,13 @@ pub extern "C" fn rust_upload(
 
     let specs = SerialSpecs {
         device: device_name.to_string(),
+        baudrate, // 使用正确的字段名
         ..SerialSpecs::default()
     };
 
     let slot_u8: u8 = match slot.try_into() {
         Ok(s) => s,
-        Err(_) => return -4, // slot 超出 u8 范围
+        Err(_) => return -4,
     };
 
     match upload(
@@ -175,9 +173,8 @@ pub extern "C" fn rust_upload(
     }
 }
 
-/// 重置设备
 #[no_mangle]
-pub extern "C" fn rust_reset(device: *const c_char) -> c_int {
+pub extern "C" fn rust_reset(device: *const c_char, baudrate: u32) -> c_int {
     if device.is_null() {
         return -1;
     }
@@ -190,6 +187,7 @@ pub extern "C" fn rust_reset(device: *const c_char) -> c_int {
 
     let specs = SerialSpecs {
         device: device_name.to_string(),
+        baudrate, // 使用正确的字段名
         ..SerialSpecs::default()
     };
 
@@ -198,7 +196,6 @@ pub extern "C" fn rust_reset(device: *const c_char) -> c_int {
         Err(_) => -3,
     }
 }
-
 // /// 测试设备
 // #[no_mangle]
 // pub extern "C" fn rust_test(
