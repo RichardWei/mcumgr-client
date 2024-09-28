@@ -13,7 +13,7 @@ pub use crate::transfer::SerialSpecs;
 
 // 引入所需的外部 crate
 // use anyhow::anyhow; // 仅保留需要的部分
-use clap::Parser;
+// use clap::Parser;
 // use hex;
 // use log::error; // 仅保留需要的部分
 use serde_json;
@@ -27,56 +27,56 @@ use std::ptr;
 /// 定义进度回调函数类型
 pub type ProgressCallback = extern "C" fn(offset: u64, total: u64);
 
-/// 定义命令行参数解析的结构体
-#[derive(Parser)]
-#[command(author, version, about, long_about = None)]
-pub struct Cli {
-    /// 设备名称
-    #[arg(short, long, default_value = "")]
-    pub device: String,
+// /// 定义命令行参数解析的结构体
+// #[derive(Parser)]
+// #[command(author, version, about, long_about = None)]
+// pub struct Cli {
+//     /// 设备名称
+//     #[arg(short, long, default_value = "")]
+//     pub device: String,
 
-    /// 是否启用详细模式
-    #[arg(short, long)]
-    pub verbose: bool,
+//     /// 是否启用详细模式
+//     #[arg(short, long)]
+//     pub verbose: bool,
 
-    /// 初始超时时间（秒）
-    #[arg(short = 't', long = "initial_timeout", default_value_t = 60)]
-    pub initial_timeout_s: u32,
+//     /// 初始超时时间（秒）
+//     #[arg(short = 't', long = "initial_timeout", default_value_t = 60)]
+//     pub initial_timeout_s: u32,
 
-    /// 后续超时时间（毫秒）
-    #[arg(short = 'u', long = "subsequent_timeout", default_value_t = 200)]
-    pub subsequent_timeout_ms: u32,
+//     /// 后续超时时间（毫秒）
+//     #[arg(short = 'u', long = "subsequent_timeout", default_value_t = 2000)]
+//     pub subsequent_timeout_ms: u32,
 
-    /// 每个数据包的重试次数
-    #[arg(long, default_value_t = 4)]
-    pub nb_retry: u32,
+//     /// 每个数据包的重试次数
+//     #[arg(long, default_value_t = 4)]
+//     pub nb_retry: u32,
 
-    /// 每行的最大长度
-    #[arg(short, long, default_value_t = 128)]
-    pub linelength: usize,
+//     /// 每行的最大长度
+//     #[arg(short, long, default_value_t = 128)]
+//     pub linelength: usize,
 
-    /// 每个请求的最大长度
-    #[arg(short, long, default_value_t = 512)]
-    pub mtu: usize,
+//     /// 每个请求的最大长度
+//     #[arg(short, long, default_value_t = 512)]
+//     pub mtu: usize,
 
-    /// 波特率
-    #[arg(short, long, default_value_t = 115_200)]
-    pub baudrate: u32,
-}
+//     /// 波特率
+//     #[arg(short, long, default_value_t = 115_200)]
+//     pub baudrate: u32,
+// }
 
-impl From<&Cli> for SerialSpecs {
-    fn from(cli: &Cli) -> SerialSpecs {
-        SerialSpecs {
-            device: cli.device.clone(),
-            initial_timeout_s: cli.initial_timeout_s,
-            subsequent_timeout_ms: cli.subsequent_timeout_ms,
-            nb_retry: cli.nb_retry,
-            linelength: cli.linelength,
-            mtu: cli.mtu,
-            baudrate: cli.baudrate,
-        }
-    }
-}
+// impl From<&Cli> for SerialSpecs {
+//     fn from(cli: &Cli) -> SerialSpecs {
+//         SerialSpecs {
+//             device: cli.device.clone(),
+//             initial_timeout_s: cli.initial_timeout_s,
+//             subsequent_timeout_ms: cli.subsequent_timeout_ms,
+//             nb_retry: cli.nb_retry,
+//             linelength: cli.linelength,
+//             mtu: cli.mtu,
+//             baudrate: cli.baudrate,
+//         }
+//     }
+// }
 
 /// 为 `SerialSpecs` 实现 `Default` trait
 impl Default for SerialSpecs {
@@ -84,7 +84,7 @@ impl Default for SerialSpecs {
         SerialSpecs {
             device: String::new(),
             initial_timeout_s: 60,
-            subsequent_timeout_ms: 1000,
+            subsequent_timeout_ms: 4000,
             nb_retry: 4,
             linelength: 128,
             mtu: 512,
@@ -92,7 +92,6 @@ impl Default for SerialSpecs {
         }
     }
 }
-
 
 #[no_mangle]
 pub extern "C" fn rust_list(device: *const c_char, baudrate: u32) -> *mut c_char {
@@ -169,7 +168,12 @@ pub extern "C" fn rust_upload(
         }),
     ) {
         Ok(_) => 0,
-        Err(_) => -5,
+        Err(_e) => match _e.to_string().as_str() {
+            "MTU too small" => -5,
+            "wrong answer types" => -6,
+            "wrong offset received" => -7,
+            _ => -9,
+        },
     }
 }
 
