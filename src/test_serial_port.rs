@@ -97,6 +97,7 @@ impl Write for TestSerialPort {
             id if id == NmpIdImage::State as u8 => {
                 if request_header.op == NmpOp::Read {
                     let state_response = ImageStateRsp {
+                        boot_version: "test version".to_string(),
                         images: self.images.clone(),
                         split_status: None,
                     };

@@ -245,6 +245,7 @@ pub struct ImageStateReq {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ImageStateRsp {
+    pub boot_version: String,
     pub images: Vec<ImageStateEntry>,
     #[serde(rename = "splitStatus", skip_serializing_if = "Option::is_none")]
     pub split_status: Option<SplitStatus>,
