@@ -27,4 +27,3 @@ foreach(kind IN ITEMS c cpp)
   target_link_libraries(example_${kind} PRIVATE mcumgr_sdk)
   add_test(NAME example_${kind} COMMAND example_${kind})
 endforeach()
-

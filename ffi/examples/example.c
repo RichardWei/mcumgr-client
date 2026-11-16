@@ -17,4 +17,3 @@ int main(void) {
     if (mc_close(&connection) != MC_OK || connection != NULL) return 9;
     return 0;
 }
-

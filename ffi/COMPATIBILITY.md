@@ -30,4 +30,3 @@ Upstream now supports UDP and BLE with SMP v2 version bits. Existing serial comp
 CI runs upstream and FFI tests, simulated serial image-list/upload tests, loopback UDP required-field tests, and independent native C/C++ consumer link/run tests. This verifies host behavior only.
 
 Hardware acceptance still requires the user's device: query image state and boot_version; upload first/subsequent/final chunks; force a lost response and check repeated-offset/new-sequence handling; confirm/erase/reset as authorized; check observed response latency against the selected timeout. No physical device operation is performed automatically by CI.
-

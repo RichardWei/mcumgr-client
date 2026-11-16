@@ -4,7 +4,11 @@ This independent Rust package wraps the upstream public API. The root package re
 
 ## Download and use
 
-The **C SDK** Actions workflow runs only on pushes to `develop-cpp-fii`. Download either `mcumgr-windows-x86_64` or `mcumgr-macos-x86_64`, then extract its SDK ZIP. Each SDK includes:
+The **C SDK** Actions workflow runs only on pushes to `develop-cpp-fii`. After both platforms pass, its `publish-release` job creates a tag and publishes both SDK ZIPs together on the repository's Releases page.
+
+The release flow follows [flashrom's publish-release job](https://github.com/RichardWei/flashrom/blob/develop/.github/workflows/build-artifacts.yml): download build artifacts, verify ZIP contents, calculate SHA-256 checksums, and publish one Release for both platforms. Tags are `c-sdk-<version>-<UTC YYYYMMDD>-g<12-character commit>`, pointing to the exact built commit. SDK version comes from `ffi/VERSION` and must match `ffi/Cargo.toml`. No manual tag push is needed.
+
+Download `mcumgr-windows-x86_64-<version>.zip` or `mcumgr-macos-x86_64-<version>.zip`, verify against the attached `SHA256SUMS.txt`, then extract. The same ZIPs are also retained as Actions artifacts. Each SDK includes:
 
 - `include/mcumgr.h`
 - `lib/mcumgr.lib` (Windows MSVC x64) or `lib/libmcumgr.a` (Intel macOS)
@@ -67,4 +71,3 @@ The header generator reads the restricted C export signatures directly and fails
 ## Updating upstream
 
 Keep local upstream changes limited to mandatory boot_version and its fixture. Rebase the working branch onto upstream/main, resolve the root package in upstream's favor except for those fields, and adapt this independent package if public Rust APIs change. The original develop branch retains the old implementation and history.
-

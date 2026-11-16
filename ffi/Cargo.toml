@@ -18,4 +18,3 @@ serialport = { version = "4.2", default-features = false }
 
 [profile.release]
 panic = "unwind"
-

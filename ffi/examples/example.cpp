@@ -18,4 +18,3 @@ int main() {
     std::cout << json << '\n';
     return 0;
 }
-

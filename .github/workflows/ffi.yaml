@@ -35,7 +35,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check generated header
-        run: python ffi/tools/generate_header.py --check
+        run: |
+          python ffi/tools/generate_header.py --check
+          version=$(head -n 1 ffi/VERSION)
+          echo "SDK_VERSION=$version" >> "$GITHUB_ENV"
       - name: Test upstream and ABI wrapper
         run: |
           cargo test --locked --target ${{ matrix.target }}
@@ -51,6 +54,7 @@ jobs:
           cp ffi/target/${{ matrix.target }}/release/${{ matrix.library }} sdk/lib/
           cp ffi/examples/* sdk/examples/
           cp ffi/README.md LICENSE native-static-libs.txt sdk/
+          cp ffi/VERSION sdk/
           cp ffi/COMPATIBILITY.md sdk/docs/
           git rev-parse HEAD > sdk/COMMIT.txt
           rustc -vV > sdk/TOOLCHAIN.txt
@@ -68,13 +72,82 @@ jobs:
           ctest --test-dir consumer-build -C Release --output-on-failure
       - name: Archive and checksum
         run: |
-          python -c "import shutil; shutil.make_archive('mcumgr-${{ matrix.name }}', 'zip', 'sdk')"
-          python -c "import hashlib,pathlib; p=pathlib.Path('mcumgr-${{ matrix.name }}.zip'); pathlib.Path(str(p)+'.sha256').write_text(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\\n')"
+          python -c "import shutil; shutil.make_archive('mcumgr-${{ matrix.name }}-${{ env.SDK_VERSION }}', 'zip', 'sdk')"
+          python -c "import hashlib,pathlib; p=pathlib.Path('mcumgr-${{ matrix.name }}-${{ env.SDK_VERSION }}.zip'); pathlib.Path(str(p)+'.sha256').write_text(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\\n')"
       - uses: actions/upload-artifact@v4
         with:
-          name: mcumgr-${{ matrix.name }}
+          name: mcumgr-${{ matrix.name }}-${{ env.SDK_VERSION }}
           path: |
-            mcumgr-${{ matrix.name }}.zip
-            mcumgr-${{ matrix.name }}.zip.sha256
+            mcumgr-${{ matrix.name }}-${{ env.SDK_VERSION }}.zip
+            mcumgr-${{ matrix.name }}-${{ env.SDK_VERSION }}.zip.sha256
           if-no-files-found: error
 
+  publish-release:
+    needs: [build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop-cpp-fii'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mcumgr-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify assets and calculate checksums
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(head -n 1 ffi/VERSION)
+          echo "SDK_VERSION=$version" >> "$GITHUB_ENV"
+          date_utc=$(date -u +%Y%m%d)
+          tag="c-sdk-${version}-${date_utc}-g${GITHUB_SHA:0:12}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          assets=(
+            "mcumgr-windows-x86_64-${version}.zip"
+            "mcumgr-macos-x86_64-${version}.zip"
+          )
+          for asset in "${assets[@]}"; do
+            test -s "release-assets/$asset"
+          done
+          python3 - "${assets[@]}" <<'PY'
+          from pathlib import Path
+          import os
+          import sys
+          import tomllib
+          import zipfile
+          version = Path('ffi/VERSION').read_text().strip()
+          if version != tomllib.loads(Path('ffi/Cargo.toml').read_text())['package']['version']:
+              raise SystemExit('SDK VERSION and Cargo package version differ')
+          for name in sys.argv[1:]:
+              library = 'mcumgr.lib' if 'windows' in name else 'libmcumgr.a'
+              with zipfile.ZipFile(Path('release-assets') / name) as archive:
+                  if archive.testzip() is not None:
+                      raise SystemExit(f'Corrupt ZIP: {name}')
+                  required = ['include/mcumgr.h', f'lib/{library}', 'README.md',
+                              'examples/CMakeLists.txt', 'examples/example.c',
+                              'examples/example.cpp', 'COMMIT.txt', 'VERSION',
+                              'DEPENDENCIES.lock', 'native-static-libs.txt']
+                  for entry in required:
+                      if not archive.read(entry):
+                          raise SystemExit(f'Empty SDK file: {name}: {entry}')
+                  if archive.read('COMMIT.txt').decode().strip() != os.environ['GITHUB_SHA']:
+                      raise SystemExit(f'Commit mismatch: {name}')
+                  if archive.read('VERSION').decode().strip() != version:
+                      raise SystemExit(f'Version mismatch: {name}')
+          PY
+          (cd release-assets && sha256sum "${assets[@]}" > SHA256SUMS.txt)
+          cat release-assets/SHA256SUMS.txt
+      - name: Publish one Release for both platforms
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.release.outputs.tag }}
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/mcumgr-windows-x86_64-${{ env.SDK_VERSION }}.zip
+            release-assets/mcumgr-macos-x86_64-${{ env.SDK_VERSION }}.zip
+            release-assets/SHA256SUMS.txt

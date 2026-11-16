@@ -39,8 +39,8 @@ typedef struct McBuffer { uint8_t *data; size_t len; } McBuffer;
 typedef void (MC_CALL *McProgress)(uint64_t offset, uint64_t total, void *user);
 """]
 exports = re.findall(r'((?:///[^\n]*\n)*)#\[no_mangle\]\npub unsafe extern "C" fn (\w+)\(([^)]*)\) -> (\w+)', source)
-if not exports:
-    raise RuntimeError("No exports found")
+if not exports or len(exports) != source.count("#[no_mangle]"):
+    raise RuntimeError("An export has an unsupported signature; update the header generator")
 for docs, name, args, result in exports:
     if docs:
         lines.append("/* " + " ".join(line[4:] for line in docs.strip().splitlines()) + " */")
@@ -65,4 +65,3 @@ if "--check" in sys.argv:
 else:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(header, encoding="utf-8", newline="\n")
-

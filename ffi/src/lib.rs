@@ -354,7 +354,7 @@ mod tests {
     use std::net::UdpSocket;
     use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
     #[test]
-    fn required_boot_version_and_raw_cbor() {
+    fn required_boot_version_over_udp() {
         for payload in [
             serde_json::json!({"boot_version": "device-v1", "images": []}),
             serde_json::json!({"images": []}),
@@ -396,6 +396,38 @@ mod tests {
     unsafe extern "C" fn progress(offset: u64, total: u64, user: *mut c_void) {
         assert!(offset <= total);
         (*(user as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
+    }
+    #[test]
+    fn custom_cbor_preserves_device_error() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let port = server.local_addr().unwrap().port();
+        let response_body = serde_cbor::to_vec(&serde_json::json!({"err":{"group":64,"rc":7}})).unwrap();
+        let expected = response_body.clone();
+        let worker = thread::spawn(move || {
+            let mut request = [0u8; 4096];
+            let (n, peer) = server.recv_from(&mut request).unwrap();
+            assert_eq!(request[0], 10); // SMP v2 write
+            assert_eq!(&request[4..6], &[0, 64]);
+            assert_eq!(request[7], 42);
+            assert_eq!(&request[8..n], &[0xa0]); // empty CBOR map
+            let mut response = request[..8].to_vec();
+            response[0] = 11;
+            response[2..4].copy_from_slice(&(response_body.len() as u16).to_be_bytes());
+            response.extend(response_body);
+            server.send_to(&response, peer).unwrap();
+        });
+        unsafe {
+            let mut c = ptr::null_mut();
+            assert_eq!(mc_open_udp(b"127.0.0.1\0".as_ptr().cast(), port, 2, 512, &mut c), 0);
+            let mut out = McBuffer { data: ptr::null_mut(), len: 0 };
+            assert_eq!(mc_transceive_cbor(c, 2, 64, 42, [0xa0].as_ptr(), 1, &mut out), 0);
+            let response: serde_cbor::Value = serde_cbor::from_slice(bytes(out.data, out.len).unwrap()).unwrap();
+            assert_eq!(response, serde_cbor::from_slice::<serde_cbor::Value>(&expected).unwrap());
+            mc_buffer_free(&mut out);
+            mc_close(&mut c);
+        }
+        worker.join().unwrap();
     }
     #[test]
     fn upload_multiple_chunks_and_progress() { unsafe {
@@ -446,4 +478,3 @@ mod tests {
         mc_close(&mut c);
     }}
 }
-
