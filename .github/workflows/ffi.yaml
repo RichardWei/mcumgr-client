@@ -1,0 +1,80 @@
+name: C SDK
+on:
+  push:
+    branches: [develop-cpp-fii]
+permissions:
+  contents: read
+concurrency:
+  group: c-sdk-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            library: mcumgr.lib
+          - name: macos-x86_64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            library: libmcumgr.a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check generated header
+        run: python ffi/tools/generate_header.py --check
+      - name: Test upstream and ABI wrapper
+        run: |
+          cargo test --locked --target ${{ matrix.target }}
+          cargo test --manifest-path ffi/Cargo.toml --target ${{ matrix.target }}
+      - name: Build CLI and C static library
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }}
+          cargo rustc --manifest-path ffi/Cargo.toml --release --target ${{ matrix.target }} -- --print native-static-libs 2>&1 | tee native-static-libs.txt
+      - name: Package SDK
+        run: |
+          mkdir -p sdk/include sdk/lib sdk/examples sdk/docs
+          cp ffi/include/mcumgr.h sdk/include/
+          cp ffi/target/${{ matrix.target }}/release/${{ matrix.library }} sdk/lib/
+          cp ffi/examples/* sdk/examples/
+          cp ffi/README.md LICENSE native-static-libs.txt sdk/
+          cp ffi/COMPATIBILITY.md sdk/docs/
+          git rev-parse HEAD > sdk/COMMIT.txt
+          rustc -vV > sdk/TOOLCHAIN.txt
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            sw_vers > sdk/BUILD_ENVIRONMENT.txt
+            xcrun --show-sdk-version >> sdk/BUILD_ENVIRONMENT.txt
+          else
+            cmd.exe /c ver > sdk/BUILD_ENVIRONMENT.txt
+          fi
+          cp ffi/Cargo.lock sdk/DEPENDENCIES.lock
+      - name: Build independent C and C++ consumers
+        run: |
+          cmake -S sdk/examples -B consumer-build -DMCUMGR_ROOT="$PWD/sdk" -DCMAKE_BUILD_TYPE=Release
+          cmake --build consumer-build --config Release
+          ctest --test-dir consumer-build -C Release --output-on-failure
+      - name: Archive and checksum
+        run: |
+          python -c "import shutil; shutil.make_archive('mcumgr-${{ matrix.name }}', 'zip', 'sdk')"
+          python -c "import hashlib,pathlib; p=pathlib.Path('mcumgr-${{ matrix.name }}.zip'); pathlib.Path(str(p)+'.sha256').write_text(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\\n')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcumgr-${{ matrix.name }}
+          path: |
+            mcumgr-${{ matrix.name }}.zip
+            mcumgr-${{ matrix.name }}.zip.sha256
+          if-no-files-found: error
+
