@@ -1,446 +1,216 @@
-# mcumgr-client
+# mcumgr-client — C/C++ SDK
 
-This is a Rust program to run mcumgr commands, used for example for Zephyr, for uploading firmware updates from a PC to an embedded device. It is a faster alternative to [the mcumgr Go program](https://github.com/apache/mynewt-mcumgr-cli).
+The `develop-cpp-fii` branch provides a Rust MCUmgr client and an independent C ABI SDK for C and C++ applications. It follows [vouch-opensource/mcumgr-client](https://github.com/vouch-opensource/mcumgr-client), retaining the mandatory `boot_version` string in image-list responses.
+
+The SDK supports serial, UDP and BLE connections, firmware image management, device information, file transfers, statistics, settings, shell commands and custom MCUmgr groups.
 
 ## Download
 
-Released builds for Windows (x86-64), Linux (x86-64 and aarch64), and macOS (universal binary for Intel and Apple Silicon) are [here](https://github.com/vouch-opensource/mcumgr-client/releases).
+Download the SDK from this fork's [Releases page](https://github.com/RichardWei/mcumgr-client/releases). Choose a release whose tag starts with `c-sdk-`.
 
-Example download:
-```
-wget https://github.com/vouch-opensource/mcumgr-client/releases/latest/download/mcumgr-client-linux-x86.zip
-wget -O - https://github.com/vouch-opensource/mcumgr-client/releases/latest/download/mcumgr-client-linux-x86.zip.sha256sum | sha256sum --check
-unzip mcumgr-client-linux-x86.zip
-```
+| Platform | SDK ZIP | Static library | Header |
+| --- | --- | --- | --- |
+| Windows x86_64, MSVC | `mcumgr-windows-x86_64-<version>.zip` | `lib/mcumgr.lib` | `include/mcumgr.h` |
+| macOS x86_64, Intel | `mcumgr-macos-x86_64-<version>.zip` | `lib/libmcumgr.a` | `include/mcumgr.h` |
 
-The Linux builds need `libdbus-1` for BLE support, which is installed by default on most distributions.
+Both packages include independent C/C++ CMake examples, documentation, license, build commit, toolchain information and resolved dependency versions. The Release also contains `SHA256SUMS.txt`.
 
-## Build Dependencies
+Prebuilt SDK consumers do **not** need Rust or Cargo. They need a compatible C/C++ compiler and platform SDK. Windows packages target MSVC with the dynamic CRT (`/MD`); MinGW compatibility is not guaranteed. The macOS package is Intel-only.
 
-Install Rust:
+These SDK ZIPs contain the static library and headers, not the CLI executable. Build the CLI separately if needed.
 
-Recommended is with [rustup](https://www.rust-lang.org/tools/install), because then it is easy to keep it up to date.
+## C/C++ quick start
 
-On Linux, BLE support needs the D-Bus development files:
-```bash
-sudo apt-get install libdbus-1-dev pkg-config
-```
+Extract the SDK ZIP and build its included examples from the extracted SDK directory.
 
-## Build
-Change to this directory and build it:
-```
-cargo build --release
-```
-Without `--release`, it builds in debug mode.
+Windows, with Visual Studio C++ build tools and CMake:
 
-## Transport Options
-
-mcumgr-client supports three transport methods:
-
-### Serial Transport (default)
-Use `-d` or `--device` to specify a serial port:
-```bash
-mcumgr-client -d /dev/ttyACM0 <command>
+```powershell
+cmake -S examples -B build -A x64 "-DMCUMGR_ROOT=$((Get-Location).Path)"
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-If not specified and only one serial device exists, it will be used automatically.
+macOS, with Xcode command-line tools and CMake:
 
-For testing without hardware, `-d test` uses a simulated device which supports the image management commands (`list`, `upload`, `test`, `erase`).
-
-### UDP Transport
-Use `--host` to connect over UDP (SMP over UDP):
-```bash
-mcumgr-client --host 192.0.2.1 <command>
+```sh
+cmake -S examples -B build -DMCUMGR_ROOT="$PWD" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-The default UDP port is 1337. Use `--port` to specify a different port:
-```bash
-mcumgr-client --host 192.0.2.1 --port 1338 <command>
+The examples use the reserved serial device name `test`, which selects the upstream simulator. They do not connect to physical hardware.
+
+For your own application:
+
+1. Include `mcumgr.h` and add the SDK's `include/` directory to your include paths.
+2. Link the static library for your platform and the required native system libraries/frameworks.
+3. Follow the imported-library configuration in the [CMake example](ffi/examples/CMakeLists.txt). The SDK's `native-static-libs.txt` records Rust's native linker dependencies.
+4. Open a connection, call the command functions, release returned buffers, then close the connection.
+
+For example, this C program queries the simulator and prints its image-list JSON:
+
+```c
+#include "mcumgr.h"
+#include <stdio.h>
+
+int main(void) {
+    McConnection *connection = NULL;
+    McBuffer result = {NULL, 0};
+
+    if (mc_open_serial("test", 115200, 60, 128, 512, &connection) != MC_OK)
+        return 1;
+
+    McStatus status = mc_image_list_json(connection, &result);
+    if (status == MC_OK) {
+        fwrite(result.data, 1, result.len, stdout);
+        fputc('\n', stdout);
+    } else if (mc_last_error(&result) == MC_OK) {
+        fwrite(result.data, 1, result.len, stderr);
+        fputc('\n', stderr);
+    }
+
+    mc_buffer_free(&result);
+    mc_close(&connection);
+    return status == MC_OK ? 0 : 1;
+}
 ```
 
-IPv6 addresses are supported as well:
-```bash
-mcumgr-client --host 2001:db8::1 <command>
+For a physical device, replace `"test"` with its serial port, such as `"COM3"` or `"/dev/ttyACM0"`. The firmware must return a string `boot_version` in its image-list response.
+
+See the [C example](ffi/examples/example.c), [C++ example](ffi/examples/example.cpp), [generated header](ffi/include/mcumgr.h) and [full SDK guide](ffi/README.md).
+
+## C API
+
+The SDK uses opaque connection handles and synchronous command calls. It uses the current upstream transport model; the old `rust_*` exports from `develop` are not retained.
+
+| Capability | C entry points |
+| --- | --- |
+| Connections | `mc_open_serial`, `mc_open_udp`, `mc_open_ble`, `mc_close`, `mc_set_timeout` |
+| Serial discovery | `mc_serial_ports_json` |
+| Firmware images | `mc_image_list_json`, `mc_image_upload`, `mc_image_test`, `mc_image_erase` |
+| Device management | `mc_reset`, `mc_echo_json`, `mc_taskstat_json`, `mc_params_json`, `mc_os_info_json`, `mc_bootloader_info_json` |
+| Files | `mc_fs_download`, `mc_fs_upload`, `mc_fs_stat_json`, `mc_fs_hash_json` |
+| Statistics | `mc_stat_list_json`, `mc_stat_read_json` |
+| Settings | `mc_settings_read_json`, `mc_settings_write`, `mc_settings_delete`, `mc_settings_commit`, `mc_settings_load`, `mc_settings_save` |
+| Shell | `mc_shell_exec_json` |
+| Custom groups | `mc_transceive_cbor` |
+| Diagnostics and memory | `mc_last_error`, `mc_buffer_free` |
+
+API rules:
+
+- Create, use and close each connection on the same thread. Do not use a connection concurrently or reenter it from a callback.
+- Initialize handle outputs to `NULL` and buffer outputs to `{NULL, 0}`. Free a returned buffer before reusing it as an output.
+- Returned buffers are length-delimited, not NUL-terminated. Release them with `mc_buffer_free()`, never `free()` or `delete`.
+- Input strings are NUL-terminated UTF-8. Input byte buffers use a pointer and length.
+- `_json` functions return JSON bytes. Custom commands accept and return CBOR bytes.
+- Status codes are `MC_OK` (0), `MC_INVALID_ARGUMENT` (1), `MC_OPERATION_FAILED` (2) and `MC_PANIC` (3). Retrieve diagnostics with `mc_last_error()` immediately after a failure.
+- Image upload accepts a synchronous progress callback and user pointer. The SDK follows upstream retry and chunking behavior.
+
+Optional fields, callback lifetimes and transport limits are documented in [mcumgr.h](ffi/include/mcumgr.h) and the [SDK guide](ffi/README.md).
+
+## Device compatibility
+
+`ImageStateRsp` retains this branch-specific field:
+
+```rust
+pub boot_version: String,
 ```
 
-### BLE Transport
-Use `--ble-address` or `--ble-name` to connect over Bluetooth Low Energy (SMP over BLE):
-```bash
-mcumgr-client --ble-address AA:BB:CC:DD:EE:FF <command>
-mcumgr-client --ble-name Zephyr <command>
+It is required: a missing or non-string `boot_version` makes image-list parsing fail. This requirement applies to both the CLI and the C SDK. The separate OS bootloader-info command does not replace it.
+
+The serial framing and existing Image/Reset command IDs are retained from the old `develop` implementation. The upstream update changes upload chunk sizing, retry conditions and retry sequence numbers. Its subsequent timeout convention is **200 ms**, compared with the old C wrapper's **4000 ms**. Pass 4000 explicitly when your device needs the longer timeout.
+
+UDP, BLE and additional command groups require matching firmware support. Upstream error helpers do not comprehensively interpret SMP v2 nested `err` responses; custom commands return these fields for the caller to inspect.
+
+CI verifies host-side behavior with simulated serial and loopback UDP tests. It does not establish physical-device compatibility. See the [compatibility report](ffi/COMPATIBILITY.md) for the remaining hardware checks.
+
+## CLI
+
+Build the root package to obtain `mcumgr-client` (`mcumgr-client.exe` on Windows):
+
+```sh
+cargo build --locked --release
 ```
 
-`--ble-name` connects to the first device whose advertised name contains the given text. On macOS, device addresses are not available, so use `--ble-name` there. If a BLE option is given, BLE is used even if `--host` or `-d` are specified too.
+The executable is written to `target/release/`. Rust is needed only to build from source. Linux builds also require D-Bus development files and `pkg-config` for the upstream BLE dependency.
 
-Use `--ble-timeout` to change the scan/connect timeout (default 10 seconds). The default `--ble-mtu` of 244 bytes requires an ATT MTU of 247. If the device supports only a smaller MTU, reduce it accordingly, for example `--ble-mtu 20` for the BLE default ATT MTU of 23.
+Examples below assume the executable is on `PATH`; in PowerShell, prefix a local executable with `.\`.
 
-BLE is tested on Linux with BlueZ. Windows and macOS are supported by the underlying [btleplug](https://github.com/deviceplug/btleplug) library, but not tested yet.
+```sh
+# Serial
+mcumgr-client -d COM3 list
+mcumgr-client -d COM3 -u 4000 upload firmware.bin --slot 1
 
-## Commands
-
-### Image Management
-
-**List images:**
-```bash
-mcumgr-client -d /dev/ttyACM0 list
+# UDP (default port: 1337)
 mcumgr-client --host 192.0.2.1 list
+
+# BLE
+mcumgr-client --ble-name Zephyr list
+
+# Inspect commands and options
+mcumgr-client --help
+mcumgr-client upload --help
 ```
 
-**Upload firmware:**
-```bash
-mcumgr-client -d /dev/ttyACM0 upload firmware-image.bin
-mcumgr-client --host 192.0.2.1 upload firmware-image.bin
+| Command group | CLI commands |
+| --- | --- |
+| Images | `list`, `upload`, `test`, `erase` |
+| Device | `reset`, `echo`, `taskstat`, `mcumgr-params`, `os-info`, `bootloader-info` |
+| Files | `fs-download`, `fs-upload`, `fs-stat`, `fs-hash` |
+| Statistics | `stat-list`, `stat-read` |
+| Settings | `settings-read`, `settings-write`, `settings-delete`, `settings-commit`, `settings-load`, `settings-save` |
+| Shell/custom | `shell`, `custom`, device-specific `hwid` and `hcdf-info` |
 
-# Upload to a specific slot
-mcumgr-client -d /dev/ttyACM0 upload firmware-image.bin --slot 1
+CLI defaults: 115200 baud, 60-second initial timeout, 200-ms subsequent timeout, 4 retries, serial line length 128 and request MTU 512. BLE defaults to a 10-second scan timeout and payload MTU 244. Device buffer limits still apply.
+
+Use `-s` for silent mode and check the process exit code; errors are also suppressed. An upload filename containing `slot1` or `slot3` can override the requested image slot, following upstream behavior.
+
+## Build and test the SDK from source
+
+The C ABI is a separate Cargo package under `ffi/`, depending on the root library by path. It does not introduce a root Cargo workspace or duplicate the protocol implementation.
+
+```sh
+python ffi/tools/generate_header.py --check
+cargo test --locked
+cargo test --manifest-path ffi/Cargo.toml
+cargo build --manifest-path ffi/Cargo.toml --release
 ```
 
-**Test/confirm an image:**
-```bash
-# Mark image for test boot
-mcumgr-client -d /dev/ttyACM0 test <image-hash>
+The static library is written to `ffi/target/release/`. To regenerate the header after changing exported signatures:
 
-# Confirm the current image
-mcumgr-client -d /dev/ttyACM0 test <image-hash> --confirm true
+```sh
+python ffi/tools/generate_header.py
 ```
 
-**Erase an image slot:**
-```bash
-mcumgr-client -d /dev/ttyACM0 erase
-mcumgr-client -d /dev/ttyACM0 erase --slot 1
+For an explicit target, pass `--target x86_64-pc-windows-msvc` or `--target x86_64-apple-darwin`; the library then appears under `ffi/target/<target>/release/`. Native platform toolchains are required. The [C SDK workflow](.github/workflows/ffi.yaml) performs these builds on GitHub-hosted runners.
+
+## Automated releases
+
+Only a push to `develop-cpp-fii` triggers the C SDK workflow:
+
+1. Build and test on Windows x86_64 and macOS Intel.
+2. Check the generated header and compile, link and run independent C/C++ consumers.
+3. Package each SDK and upload Actions artifacts.
+4. After both platforms succeed, verify ZIP contents, versions and commit IDs; generate `SHA256SUMS.txt`.
+5. Create a tag pointing to the built commit and publish both ZIPs and checksums in one Release.
+
+Tag format:
+
+```text
+c-sdk-<version>-<UTC YYYYMMDD>-g<12-character commit>
 ```
 
-### OS/Device Management
+SDK version is defined in [ffi/VERSION](ffi/VERSION) and must match [ffi/Cargo.toml](ffi/Cargo.toml). No manual tag push is required. A documentation-only push to this branch also triggers a build and Release because there is no path filter.
 
-**Reset the device:**
-```bash
-mcumgr-client -d /dev/ttyACM0 reset
-mcumgr-client --host 192.0.2.1 reset
-```
+The SDK workflow does not publish Linux, ARM64, shared libraries or CLI executables. The upstream CLI Release workflow is separate.
 
-**Echo test:**
-```bash
-mcumgr-client --host 192.0.2.1 echo "hello world"
-```
+## Upstream maintenance
 
-**Get task/thread statistics:**
-```bash
-mcumgr-client --host 192.0.2.1 taskstat
-```
+The original `develop` branch preserves the previous implementation. Work on `develop-cpp-fii` is based on upstream `main`, with the required `boot_version` field and simulator fixture retained in the root source. C bindings, examples and SDK documentation live under `ffi/`; SDK CI lives in its own workflow.
 
-**Get MCUmgr parameters:**
-```bash
-mcumgr-client --host 192.0.2.1 mcumgr-params
-```
+When updating, rebase this branch onto `upstream/main`, preserve the required response field and fixture, and adapt the independent C wrapper to public Rust API changes. Verify both platform builds and device behavior before relying on a new SDK.
 
-**Get OS/application information:**
-```bash
-mcumgr-client --host 192.0.2.1 os-info
-mcumgr-client --host 192.0.2.1 os-info --format a   # all info
-mcumgr-client --host 192.0.2.1 os-info --format s   # kernel name
-mcumgr-client --host 192.0.2.1 os-info --format v   # kernel version
-```
+## License
 
-Format specifiers: `s`=kernel name, `n`=node name, `r`=release, `v`=version, `b`=build date, `m`=machine, `p`=processor, `i`=platform, `o`=OS, `a`=all
-
-**Get bootloader information:**
-```bash
-mcumgr-client --host 192.0.2.1 bootloader-info
-mcumgr-client --host 192.0.2.1 bootloader-info --query mode
-```
-
-**Get hardware ID:**
-```bash
-mcumgr-client --host 192.0.2.1 hwid
-```
-Note: Requires a custom os-info hook on the device supporting format `h` (`CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS=y` and `CONFIG_MCUMGR_GRP_OS_INFO_CUSTOM_HOOKS=y`).
-
-### Shell Management
-
-Execute shell commands on the device (requires `CONFIG_MCUMGR_GRP_SHELL=y`):
-
-```bash
-mcumgr-client --host 192.0.2.1 shell "kernel uptime"
-mcumgr-client --host 192.0.2.1 shell "kernel version"
-mcumgr-client --host 192.0.2.1 shell "device list"
-mcumgr-client --host 192.0.2.1 shell "sensor get bmi088@0"
-```
-
-### File System Management
-
-Requires `CONFIG_MCUMGR_GRP_FS=y` on the device.
-
-**Download a file from the device:**
-```bash
-mcumgr-client --host 192.0.2.1 fs-download /lfs/config.txt ./config.txt
-```
-
-**Upload a file to the device:**
-```bash
-mcumgr-client --host 192.0.2.1 fs-upload ./config.txt /lfs/config.txt
-```
-
-**Get file size:**
-```bash
-mcumgr-client --host 192.0.2.1 fs-stat /lfs/config.txt
-```
-
-**Calculate file hash:**
-```bash
-mcumgr-client --host 192.0.2.1 fs-hash /lfs/config.txt
-mcumgr-client --host 192.0.2.1 fs-hash /lfs/config.txt --hash-type crc32
-```
-
-### Statistics Management
-
-Requires `CONFIG_MCUMGR_GRP_STAT=y` on the device.
-
-**List available statistics groups:**
-```bash
-mcumgr-client --host 192.0.2.1 stat-list
-```
-
-**Read statistics from a group:**
-```bash
-mcumgr-client --host 192.0.2.1 stat-read mygroup
-```
-
-### Settings/Config Management
-
-Requires `CONFIG_MCUMGR_GRP_SETTINGS=y` on the device.
-
-**Read a setting:**
-```bash
-mcumgr-client --host 192.0.2.1 settings-read my/setting/key
-mcumgr-client --host 192.0.2.1 settings-read my/setting/key --max-size 256
-```
-
-**Write a setting (hex value):**
-```bash
-mcumgr-client --host 192.0.2.1 settings-write my/setting/key 48656c6c6f
-```
-
-**Delete a setting:**
-```bash
-mcumgr-client --host 192.0.2.1 settings-delete my/setting/key
-```
-
-**Commit/load/save settings:**
-```bash
-mcumgr-client --host 192.0.2.1 settings-commit
-mcumgr-client --host 192.0.2.1 settings-load
-mcumgr-client --host 192.0.2.1 settings-save
-```
-
-### Custom Groups
-
-Send a raw request to an application-defined MCUmgr group (group IDs 64 and up are reserved for user groups):
-
-```bash
-mcumgr-client --host 192.0.2.1 custom --group 64 --id 0 --op read --body a1636b657907
-```
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-g, --group` | MCUmgr group ID | - |
-| `-i, --id` | Command ID within the group | 0 |
-| `-o, --op` | Operation: `read` or `write` | read |
-| `--body` | CBOR request body as hex string | empty map |
-
-The body above is the CBOR encoding of `{"key": 7}`. It can be generated with e.g. `pip install cbor2` and `python3 -c 'import cbor2; print(cbor2.dumps({"key": 7}).hex())'`. The response is printed as JSON, including any error code returned by the device.
-
-**Query HCDF fragment info from a CogniPilot device (custom group 100):**
-```bash
-mcumgr-client --host 192.0.2.1 hcdf-info
-```
-
-## Global Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-d, --device` | Serial port device | Auto-detect |
-| `--host` | UDP host (use instead of serial) | - |
-| `--port` | UDP port | 1337 |
-| `--ble-address` | BLE device address (use instead of serial) | - |
-| `--ble-name` | BLE device name to scan for (use instead of serial) | - |
-| `--ble-timeout` | BLE scan/connect timeout in seconds | 10 |
-| `--ble-mtu` | BLE ATT MTU payload size in bytes | 244 |
-| `-v, --verbose` | Enable debug logging | false |
-| `-s, --silent` | Only print command results, no banner or log messages | false |
-| `-t, --initial_timeout` | Initial timeout in seconds | 60 |
-| `-u, --subsequent_timeout` | Subsequent timeout in ms | 200 |
-| `--nb-retry` | Number of retries per packet | 4 |
-| `-l, --linelength` | Maximum line length (serial) | 128 |
-| `-m, --mtu` | Maximum request size | 512 |
-| `-b, --baudrate` | Serial baud rate | 115200 |
-| `-V, --version` | Print version | - |
-
-## Zephyr Configuration
-
-To enable MCUmgr features on your Zephyr device, add the relevant Kconfig options:
-
-### Basic MCUmgr (required)
-```
-CONFIG_NET_BUF=y
-CONFIG_ZCBOR=y
-CONFIG_MCUMGR=y
-```
-
-Plus at least one transport:
-
-### Serial Transport
-```
-CONFIG_BASE64=y
-CONFIG_CRC=y
-CONFIG_CONSOLE=y
-CONFIG_UART_MCUMGR=y
-CONFIG_MCUMGR_TRANSPORT_UART=y
-```
-
-The UART is selected with `zephyr,uart-mcumgr` in the devicetree `chosen` node, which many boards already define.
-
-### UDP Transport
-```
-CONFIG_NETWORKING=y
-CONFIG_NET_UDP=y
-CONFIG_NET_SOCKETS=y
-CONFIG_NET_IPV4=y
-CONFIG_MCUMGR_TRANSPORT_UDP=y
-CONFIG_MCUMGR_TRANSPORT_UDP_IPV4=y   # CONFIG_NET_IPV6 and CONFIG_MCUMGR_TRANSPORT_UDP_IPV6 for IPv6
-```
-
-### BLE Transport
-```
-CONFIG_BT=y
-CONFIG_BT_PERIPHERAL=y
-CONFIG_MCUMGR_TRANSPORT_BT=y
-```
-
-### OS Management Group
-```
-CONFIG_MCUMGR_GRP_OS=y
-CONFIG_MCUMGR_GRP_OS_INFO=y
-CONFIG_THREAD_MONITOR=y
-CONFIG_MCUMGR_GRP_OS_TASKSTAT=y
-CONFIG_MCUMGR_GRP_OS_MCUMGR_PARAMS=y
-CONFIG_MCUMGR_GRP_OS_BOOTLOADER_INFO=y
-```
-
-For the stack columns of `taskstat`, add:
-```
-CONFIG_THREAD_STACK_INFO=y
-CONFIG_INIT_STACKS=y
-CONFIG_MCUMGR_GRP_OS_TASKSTAT_STACK_INFO=y
-```
-
-### Image Management Group
-```
-CONFIG_BOOTLOADER_MCUBOOT=y
-CONFIG_FLASH=y
-CONFIG_FLASH_MAP=y
-CONFIG_STREAM_FLASH=y
-CONFIG_IMG_MANAGER=y
-CONFIG_MCUMGR_GRP_IMG=y
-```
-
-### Shell Management Group
-```
-CONFIG_SHELL=y
-CONFIG_SHELL_BACKEND_DUMMY=y
-CONFIG_BASE64=y
-CONFIG_MCUMGR_GRP_SHELL=y
-```
-
-### Statistics Management Group
-```
-CONFIG_STATS=y
-CONFIG_STATS_NAMES=y
-CONFIG_MCUMGR_GRP_STAT=y
-```
-
-### File System Management Group
-```
-CONFIG_FILE_SYSTEM=y
-CONFIG_MCUMGR_GRP_FS=y
-CONFIG_MCUMGR_GRP_FS_CHECKSUM_HASH=y   # for fs-hash
-```
-
-The application needs to mount a file system, e.g. LittleFS with `CONFIG_FILE_SYSTEM_LITTLEFS=y`.
-
-### Settings Management Group
-```
-CONFIG_SETTINGS=y
-CONFIG_SETTINGS_RUNTIME=y
-CONFIG_MCUMGR_GRP_SETTINGS=y
-```
-
-### Custom Management Group
-
-A custom group is registered in the application with `mgmt_register_group()` and `MCUMGR_HANDLER_DEFINE()`. See the [MCUmgr handlers documentation](https://docs.zephyrproject.org/latest/services/device_mgmt/mcumgr_handlers.html) and the example in Zephyr's `tests/subsys/mgmt/mcumgr/handler_demo`. For simple commands, a regular shell command executed with `shell` is often easier.
-
-## Examples
-
-**Flash firmware over serial with optimized settings:**
-```bash
-mcumgr-client -m 4096 -l 8192 -d /dev/ttyACM0 upload firmware-image.bin
-```
-
-**Monitor device over UDP:**
-```bash
-mcumgr-client --host 192.0.2.1 os-info
-mcumgr-client --host 192.0.2.1 taskstat
-mcumgr-client --host 192.0.2.1 shell "kernel uptime"
-```
-
-**Flash firmware over BLE:**
-```bash
-mcumgr-client --ble-name Zephyr upload firmware-image.bin
-```
-
-**Use from scripts:**
-With `-s`, only the command result is printed, without the version banner and log messages. Error messages are suppressed as well, so check the exit code, which is 1 on failure:
-```bash
-mcumgr-client -s --host 192.0.2.1 list || echo "failed"
-```
-
-**Auto-detect serial device:**
-You can omit the `-d` parameter. If only one device exists, it will be used automatically. If the filename contains `slot1` or `slot3`, it flashes to that slot:
-```bash
-mcumgr-client upload firmware-slot1.bin
-mcumgr-client upload ext-flash-slot3.bin
-```
-
-# Notes
-There is a bug in the Zephyr CDC ACM driver. When building mcuboot for it, it needs this patch:
-
-```
---- a/subsys/usb/device/class/cdc_acm.c
-+++ b/subsys/usb/device/class/cdc_acm.c
-@@ -70,7 +70,7 @@ LOG_MODULE_REGISTER(usb_cdc_acm, CONFIG_USB_CDC_ACM_LOG_LEVEL);
- #define CDC_ACM_DEFAULT_BAUDRATE {sys_cpu_to_le32(115200), 0, 0, 8}
- 
- /* Size of the internal buffer used for storing received data */
--#define CDC_ACM_BUFFER_SIZE (CONFIG_CDC_ACM_BULK_EP_MPS)
-+#define CDC_ACM_BUFFER_SIZE 512
- 
- /* Serial state notification timeout */
- #define CDC_CONTROL_SERIAL_STATE_TIMEOUT_US 100000
-```
-
-With the default settings for the line length and MTU, it needs about 1:48 minutes to flash 917,504 bytes (5 times faster than the original mcumgr program). With these settings for mcuboot:
-
-```
-CONFIG_BOOT_MAX_LINE_INPUT_LEN=8192
-CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE=4096
-```
-
-The line length and MTU size can be increased, like this for the example:
-
-```
-./target/release/mcumgr-client -m 4096 -l 8192 -d /dev/ttyACM0 upload firmware-image.bin 
-```
-
-This needs 17 seconds for the same file (instead of 1:48 minutes with the default buffer sizes), which is more than 10 times faster than the original mcumgr Go program.
-
-# Python wrapper
-To make it easier to use the program from Python, there is a wrapper for it [here](https://pypi.org/project/mcumgr-client-wrapper/).
+[Apache License 2.0](LICENSE).
